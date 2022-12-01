@@ -1,6 +1,4 @@
 [submodule "ABC-Enhancer-Gene-Prediction"]
 	path = ABC-Enhancer-Gene-Prediction
-	url = git@github.com:kadepettie/popABC.git
-[submodule "Hornet"]
-	path = Hornet
-	url = git@github.com:kadepettie/popABC.git
+	url = git@github.com:kadepettie/ABC-Enhancer-Gene-Prediction.git
+	branch = hichip
