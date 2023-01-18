@@ -21,3 +21,6 @@ contained within these directories. Required inputs are detailed and commented
 in the `.config` files. Detailed descriptions of all methods and analyses can 
 be found in our preprint (2022).
 
+
+![Figure 1](Fig1.png)
+
