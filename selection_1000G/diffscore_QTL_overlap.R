@@ -606,6 +606,7 @@ diffQTLFSTWilcoxon <-  function(df,
                               qtl_dir_col='bqtl_direction',
                               abc_p_thresh=0.05,
                               abc_p_nonthresh=abc_p_thresh,
+                              freq_bin = FALSE, # bin tests by mean allele frequency
                               abc_p_col='atac_p',
                               abc_dir_col='atac_monodirection',
                               fst_col='bqtl_fst',
@@ -713,11 +714,37 @@ diffQTLFSTWilcoxon <-  function(df,
         dplyr::filter(diff_status=='non-diff') %>%
         pull(fst_var)
 
-    wt <- wilcox.test(diff_fst, nondiff_fst, alternative='greater', conf.int=conf_int)
+    if (freq_bin) {
 
-    wres <- list(qtl_significance = qtl_p_thresh,
-                 diff_significance = abc_p_thresh,
-                 pvalue = wt$p.value)
+        dfs <- dfs %>%
+            rowwise() %>%
+            mutate(bqtl_mean_alt_freq = mean(c(bqtl_AFR_alt_frq,bqtl_EUR_alt_frq)), .before=bqtl_AFR_alt_frq) %>%
+            ungroup() %>%
+            mutate(af_bin = ntile(bqtl_mean_alt_freq, 10)) %>%
+            group_by(af_bin) %>%
+            summarize(bqtl_mean_alt_freq_lower = min(bqtl_mean_alt_freq, na.rm=TRUE),
+                      bqtl_mean_alt_freq_upper = max(bqtl_mean_alt_freq, na.rm=TRUE),
+                      diff.N = length(fst_var[diff_status=='diff' & !is.na(fst_var)]),
+                      non_diff.N = length(fst_var[diff_status=='non-diff' & !is.na(fst_var)]),
+                      diff.bqtl_alt_frq_AFR_mean = mean(bqtl_AFR_alt_frq[diff_status=='diff' & !is.na(fst_var)], na.rm=TRUE),
+                      diff.bqtl_alt_frq_EUR_mean = mean(bqtl_EUR_alt_frq[diff_status=='diff' & !is.na(fst_var)], na.rm=TRUE),
+                      non_diff.bqtl_alt_frq_AFR_mean = mean(bqtl_AFR_alt_frq[diff_status=='non-diff' & !is.na(fst_var)], na.rm=TRUE),
+                      non_diff.bqtl_alt_frq_EUR_mean = mean(bqtl_EUR_alt_frq[diff_status=='non-diff' & !is.na(fst_var)], na.rm=TRUE),
+                      diff.fst_var_mean = mean(fst_var[diff_status=='diff'], na.rm=TRUE),
+                      non_diff.fst_var_mean = mean(fst_var[diff_status=='non-diff'], na.rm=TRUE),
+                      # test alt hypoth that diff mean is greater than non-diff mean specifically to improve power
+                      diff_wilcoxP = ifelse(n_distinct(diff_status)==2, wilcox.test(fst_var ~ diff_status, alternative='greater')$p.value, NA)) %>%
+            ungroup()
+
+        return(dfs)
+
+    } else {
+        wt <- wilcox.test(diff_fst, nondiff_fst, alternative='greater', conf.int=conf_int)
+
+        wres <- list(qtl_significance = qtl_p_thresh,
+                     diff_significance = abc_p_thresh,
+                     pvalue = wt$p.value)
+    }
 
     if (return_df) {
         outdf <- dfs %>%
@@ -1259,6 +1286,9 @@ parser$add_argument('--frq_fname',
 parser$add_argument('--fst_fname',
                     type='character',
                     default=NULL)
+parser$add_argument('--ihs_fname',
+                    type='character',
+                    default=NULL)
 parser$add_argument('--chain_fname',
                     type='character',
                     default=NULL)
@@ -1303,7 +1333,7 @@ d_all_fname <- opt$d_all_fname
 gs_fname <- opt$gs_fname
 frq_fname <- opt$frq_fname
 fst_fname <- opt$fst_fname
-
+ihs_fname <- opt$ihs_fname
 
 chain_fname <- opt$chain_fname
 ref_fname <- opt$ref_fname
@@ -1330,6 +1360,7 @@ firstcols <- c('hgnc_symbol','name','TargetGeneTSS','distance','mean_ABC','width
 # ancestry relative allele freq data
 frq <- read_tsv(frq_fname)
 fst <- read_tsv(fst_fname)
+ihs <- read_tsv(ihs_fname)
 # bQTL data (either all tested or sig only (CTCF))
 qtl <- read_tsv(qtl_fname)
 if (qtl_name=='ctcf') {
@@ -1357,7 +1388,20 @@ qtl <- qtl %>%
                   position=start,
                   bqtl_fst=FST,
                   bqtl_fst_percentile=fst_percentile),
-       all.x=TRUE)
+       all.x=TRUE) %>%
+  merge(.,
+        ihs %>%
+            dplyr::select(seqnames,
+                          start,
+                          rank2_abs_ihs,
+                          rank2_percentile,
+                          max_abs_ihs) %>%
+            dplyr::rename(Chr=seqnames,
+                          position=start,
+                          bqtl_rank2_abs_ihs=rank2_abs_ihs,
+                          bqtl_rank2_percentile=rank2_percentile,
+                          bqtl_max_abs_ihs=max_abs_ihs),
+        all.x=TRUE)
 
 # gene set
 gs <- readLines(gs_fname)
@@ -1622,7 +1666,13 @@ wabc <- join_overlap_left(
            # concordance = if high frequency allele is the high or low affinity allele consistently throughout a CRE
            bqtl_concordance=case_when(sum(bqtl_p < 0.05)>0 & (paste0(coded_alt_affinity[bqtl_p < 0.05], collapse=';')==paste0(coded_alt_high_freq[bqtl_p < 0.05], collapse=';') |
                                            paste0(-coded_alt_affinity[bqtl_p < 0.05], collapse=';')==paste0(coded_alt_high_freq[bqtl_p < 0.05], collapse=';')) ~ TRUE,
-                                       sum(bqtl_p < 0.05)>0 ~ FALSE)) %>%
+                                       sum(bqtl_p < 0.05)>0 ~ FALSE),
+           bqtl_ihs_exists = if_else(any(!is.na(bqtl_max_abs_ihs) & !is.na(bqtl_p)), TRUE, FALSE),
+           bqtl_ihs_pos=ifelse(bqtl_ihs_exists, bqtl_pos[bqtl_p==min(bqtl_p[!is.na(bqtl_max_abs_ihs)])], NA),
+           bqtl_ihs_p=ifelse(bqtl_ihs_exists, min(bqtl_p[!is.na(bqtl_max_abs_ihs)]), NA),
+           bqtl_rank2_abs_ihs=ifelse(bqtl_ihs_exists, bqtl_rank2_abs_ihs[bqtl_p==min(bqtl_p[!is.na(bqtl_max_abs_ihs)])], NA),
+           bqtl_rank2_percentile=ifelse(bqtl_ihs_exists, bqtl_rank2_percentile[bqtl_p==min(bqtl_p[!is.na(bqtl_max_abs_ihs)])], NA),
+           bqtl_max_abs_ihs=ifelse(bqtl_ihs_exists, bqtl_max_abs_ihs[bqtl_p==min(bqtl_p[!is.na(bqtl_max_abs_ihs)])], NA)) %>%
     dplyr::slice(1) %>%
     ungroup() %>%
     dplyr::select(-c(ref,alt,AFR_ref_frq,EUR_ref_frq),
@@ -1774,6 +1824,8 @@ spts <- c(TRUE, FALSE)
 
 ares <- tibble()
 wres <- tibble() # for storing full Wilcoxon dfs for FST plotting
+wres_binned <- tibble() # for storing allele frequency-binned FST wilcoxon tests to summarize in supp plot
+wresihs <- tibble() # for storing full Wilcoxon dfs for iHS plotting
 
 # score types
 for (st in sts) {
@@ -1961,6 +2013,10 @@ for (st in sts) {
 
       if (cf=='all') next
 
+      print(cf)
+
+      print("    Fst wilcox...")
+
       res <- diffQTLFSTWilcoxon(wabc_olap,
                                   qtl_p_thresh=0.05,
                                   qtl_p_col=paste0(qt, '_p'),
@@ -1978,6 +2034,54 @@ for (st in sts) {
 
         wres <- rbind(wres, res)
 
+        print("    Fst wilcox binned...")
+
+        res_binned <- diffQTLFSTWilcoxon(wabc_olap,
+                                        qtl_p_thresh=0.05,
+                                        qtl_p_col=paste0(qt, '_p'),
+                                        qtl_dir_col=paste0(qt, '_direction'),
+                                        abc_p_thresh=0.05,
+                                        abc_p_nonthresh=0.05,
+                                        abc_p_col=paste0(st, '_p'),
+                                        abc_dir_col=paste0(st, '_monodirection'),
+                                        fst_col=paste0(qt, '_fst'),
+                                        class_filt=cf, # 'promoter', 'non-promoter', 'none'
+                                        class_res='chip',
+                                        freq_bin = TRUE,
+                                        return_df=FALSE) %>%
+                  mutate(cre_type=cf,
+                         qtl_type=qt,
+                         score_type=st,
+                         .before=1)
+
+        wres_binned <- rbind(wres_binned, res_binned)
+
+        if (qt=='bqtl') {
+
+          print("    iHS wilcox...")
+
+          resihs <- diffQTLFSTWilcoxon(wabc_olap,
+                                        qtl_p_thresh=0.05,
+                                        qtl_p_col=paste0(qt, '_p'),
+                                        qtl_dir_col=paste0(qt, '_direction'),
+                                        abc_p_thresh=0.05,
+                                        abc_p_nonthresh=0.05,
+                                        abc_p_col=paste0(st, '_p'),
+                                        abc_dir_col=paste0(st, '_monodirection'),
+                                        fst_col=paste0(qt, '_max_abs_ihs'),
+                                        class_filt=cf, # 'promoter', 'non-promoter', 'none'
+                                        class_res='chip',
+                                        freq_bin=FALSE,
+                                        return_df=TRUE) %>%
+                          mutate(cre_type=cf,
+                                 qtl_type=qt,
+                                 score_type=st,
+                                 .before=1)
+
+          wresihs <- rbind(wresihs, resihs)
+
+        }
+
     }
 
   }
@@ -1987,7 +2091,13 @@ ares <- ares %>%
   mutate(chip_type=case_when(qtl_type=='bqtl' ~ qtl_name))
 wres <- wres %>%
   mutate(chip_type=case_when(qtl_type=='bqtl' ~ qtl_name))
+wres_binned <- wres_binned %>%
+  mutate(chip_type=case_when(qtl_type=='bqtl' ~ qtl_name))
+wresihs <- wresihs %>%
+  mutate(chip_type=case_when(qtl_type=='bqtl' ~ qtl_name))
 
 write_tsv(ares, paste0(outbase, ".fisherEnrichments.txt"))
 write_tsv(wres, paste0(outbase, ".fstWilcoxData.txt.gz"))
+write_tsv(wres_binned, paste0(outbase, ".fstWilcoxBinned.txt.gz"))
+write_tsv(wresihs, paste0(outbase, ".ihsWilcoxData.txt.gz"))
 write_tsv(wabc_olap, paste0(outbase, ".txt.gz"))

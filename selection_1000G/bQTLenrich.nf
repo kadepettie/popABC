@@ -27,6 +27,7 @@ Channel.fromList(params.qtl_fnames)
   .combine( Channel.fromPath(params.gs_fname) )
   .combine( Channel.fromPath(params.frq_fname) )
   .combine( Channel.fromPath(params.fst_fname) )
+  .combine( Channel.fromPath(params.ihs_fname) )
   .combine( Channel.fromPath(params.chain_fname) )
   .combine( Channel.fromPath(params.ref_fname) )
   .combine( Channel.fromPath(params.eqtl_lfsr_fname) )
@@ -45,10 +46,10 @@ process qtl_overlap{
   params.mode =~ /(all)/
 
   input:
-  tuple path(qfname), path(d), path(gs), path(frq), path(fst), path(ch), path(ref), path(elf), path(ees), path(de), path(re), path(rr), path(t) from QTL
+  tuple path(qfname), path(d), path(gs), path(frq), path(fst), path(ihs), path(ch), path(ref), path(elf), path(ees), path(de), path(re), path(rr), path(t) from QTL
 
   output:
-  tuple path("*.fisherEnrichments.txt"), path("*.fstWilcoxData.txt.gz") into CONCAT
+  tuple path("*.fisherEnrichments.txt"), path("*.fstWilcoxData.txt.gz"), path("*.fstWilcoxBinned.txt.gz"), path("*.ihsWilcoxData.txt.gz")  into CONCAT
   path("${name}.${qn}.txt.gz") into TOP_CANDS
 
   script:
@@ -62,6 +63,7 @@ process qtl_overlap{
   --gs_fname $gs \
   --frq_fname $frq \
   --fst_fname $fst \
+  --ihs_fname $ihs \
   --chain_fname $ch \
   --ref_fname $ref \
   --eqtl_lfsr_fname $elf \
@@ -80,6 +82,8 @@ process concat_plot{
   label 'r'
   publishDir "${params.outdir}/aggregate/", pattern: "*.fisherEnrichmentsAgg.txt"
   publishDir "${params.outdir}/aggregate/", pattern: "*.diffQTLoverlap.fstWilcoxDataAgg.txt.gz"
+  publishDir "${params.outdir}/aggregate/", pattern: "*.diffQTLoverlap.fstWilcoxBinnedAgg.txt.gz"
+  publishDir "${params.outdir}/aggregate/", pattern: "*.diffQTLoverlap.ihsWilcoxDataAgg.txt.gz"
   publishDir "${params.outdir}/aggregate/plots/", pattern: "*.png"
 
   when:
@@ -91,6 +95,8 @@ process concat_plot{
   output:
   path("*.fisherEnrichmentsAgg.txt")
   path("*.diffQTLoverlap.fstWilcoxDataAgg.txt.gz")
+  path("*.diffQTLoverlap.fstWilcoxBinnedAgg.txt.gz")
+  path("*.diffQTLoverlap.ihsWilcoxDataAgg.txt.gz")
   path("*.png")
 
   script:
@@ -100,6 +106,8 @@ process concat_plot{
   --plotdir ${params.plotdir} \
   --fisher_pattern fisherEnrichments.txt \
   --wilcox_pattern fstWilcoxData.txt.gz \
+  --binned_pattern fstWilcoxBinned.txt.gz \
+  --ihs_pattern ihsWilcoxData.txt.gz \
   --agg_dir . \
   --name $name \
   --outdir .
